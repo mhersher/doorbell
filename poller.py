@@ -32,18 +32,23 @@ class doorbell(object):
         self.whitelistednumbers = settings.get('whitelist')
         try:
             hue_bridge_ip = settings.get('hue_bridge_ip')
+            hue_bridge_username = settings.get('hue_bridge_username')
+            hue_light_name = settings.get('hue_light_name')
             self.hue_enabled = True
         except NoOptionError:
             print('No Hue bridge config - lights will not work.')
             self.hue_enabled = False
 
         #Set up queues
-        queue_client = boto3.client('sqs')
-        twilio_client = Client(account_sid, auth_token)
+        self.queue_client = boto3.client('sqs')
+        self.twilio_client = Client(self.account_sid, self.auth_token)
         if self.hue_enabled==True:
             try:
-                self.hue_bridge = Bridge(hue_bridge_ip)
-            except PhueException:
+                hue_bridge = Bridge(hue_bridge_ip,hue_bridge_username)
+                hue_bridge.connect()
+                lights = hue_bridge.get_light_objects('name')
+                self.light = lights[hue_light_name]
+            except:
                 print('Error initializing Hue bridge - lights will not work')
                 self.hue_enabled = False
     def read_arguments(self):
@@ -68,7 +73,7 @@ class doorbell(object):
         self.config_file = args.config_file
 
     def send_sms(self,destination,content):
-        message = twilio_client.messages.create(body=content,to=destination,from_='+14159081771')
+        message = self.twilio_client.messages.create(body=content,to=destination,from_='+14159081771')
         print(message.sid)
 
     def validate_sms(self,message):
@@ -77,21 +82,45 @@ class doorbell(object):
         message_body = message['Body']
         if message_source in self.whitelistednumbers:
             print('message source validated')
-            send_sms(message_source,'Phone number whitelisted, opening door')
+            self.send_sms(message_source,'Phone number whitelisted, opening door')
             return 1
         else:
             print('unknown message source')
-            send_sms('+16172296072',message_source+': '+message_body)
-            send_sms(message_source,'Phone number not known')
+            self.send_sms('+16172296072',message_source+': '+message_body)
+            self.send_sms(message_source,'Phone number not known')
             return -1
 
     def lights_on(self):
-        hue_bridge.connect()
-        hue_bridge.set_group(1,'on',True)
-        hue_bridge.set_group(1,'bri',254)
+        hue = self.light.hue
+        bri = self.light.brightness
+        state = self.light.on
+        sat = self.light.saturation
+        print('turning lights on')
+        if self.debug == True:
+            self.light.on = True
+            self.light.brightness = 254
+            time.sleep(1)
+            self.light.on = False
+            time.sleep(1)
+            self.light.on = True
+            time.sleep(1)
+            self.light.on = False
+            return
+        self.light.on = True
+        self.brightness = 254
+
+    def rainbow_lights(self):
+        self.light.hue = 0
+        cycle_count = 0 
+        while cycle_count <= 3:
+            if sepf.light.hue >= 65000:
+                self.light.hue = 0
+                cycle_count += 1
+            self.light.hue += 500
+
 
     def open_door(self):
-        if debug==True:
+        if self.debug==True:
             print('debug mode active: would open door now')
         else:
             print('opening door')
@@ -104,14 +133,18 @@ class doorbell(object):
     def poller(self):
         while True:
             print('Polling for messages')
-            messages = queue_client.receive_message(QueueUrl=text_queue_url)
+            messages = self.queue_client.receive_message(QueueUrl=self.text_queue_url)
             print('Queue response received')
             if 'Messages' in messages:
                 for message in messages['Messages']:
-                    queue_client.delete_message(QueueUrl=text_queue_url,ReceiptHandle=message['ReceiptHandle'])
-                    if validate_sms(json.loads(message['Body']))  == 1:
+                    self.queue_client.delete_message(QueueUrl=self.text_queue_url,ReceiptHandle=message['ReceiptHandle'])
+                    if self.validate_sms(json.loads(message['Body'])) == 1:
                         self.open_door()
-                        self.lights_on()
+                        if self.hue_enabled==True:
+                            try:
+                                self.lights_on()
+                            except:
+                                self.hue_enabled==False
             else:
                 print('Queue Empty')
 
