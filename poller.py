@@ -29,7 +29,8 @@ class doorbell(object):
         self.callback_queue_url = settings.get('text_queue_url')
         self.account_sid = settings.get('account_sid')
         self.auth_token = settings.get('auth_token')
-        self.whitelistednumbers = settings.get('whitelist')
+        self.whitelisted_numbers = settings.get('whitelist')
+        self.access_code = settings.get('access_code')
         try:
             hue_bridge_ip = settings.get('hue_bridge_ip')
             hue_bridge_username = settings.get('hue_bridge_username')
@@ -80,21 +81,21 @@ class doorbell(object):
         message_source = message['From']
         message_sid = message['SmsMessageSid']
         message_body = message['Body']
-        if message_source in self.whitelistednumbers:
+        if message_source in self.whitelisted_numbers:
             print('message source validated')
             self.send_sms(message_source,'Phone number whitelisted, opening door')
+            return 1
+        elif message_body==self.access_code:
+            print('valid access code')
+            self.send_sms(message_source,'Access code confirmed, opening door')
             return 1
         else:
             print('unknown message source')
             self.send_sms('+16172296072',message_source+': '+message_body)
-            self.send_sms(message_source,'Phone number not known')
+            self.send_sms(message_source,'Invalid access code.  Please try again.')
             return -1
 
     def lights_on(self):
-        hue = self.light.hue
-        bri = self.light.brightness
-        state = self.light.on
-        sat = self.light.saturation
         print('turning lights on')
         if self.debug == True:
             self.light.on = True
@@ -110,13 +111,26 @@ class doorbell(object):
         self.brightness = 254
 
     def rainbow_lights(self):
+        print('Doing rainbow lights')
+        previous_state = self.light.on
+        previous_hue = self.light.hue
+        previous_sat = self.light.saturation
+        previous_brightness = self.light.brightness
+        self.light.on = True
+        self.light.brightness = 254
         self.light.hue = 0
-        cycle_count = 0 
-        while cycle_count <= 3:
-            if sepf.light.hue >= 65000:
-                self.light.hue = 0
+        self.light.saturation = 254
+        cycle_count = 0
+        while cycle_count == 0:
+            if self.light.hue >= 63000:
                 cycle_count += 1
-            self.light.hue += 500
+                self.light.hue = 0
+                print(cycle_count)
+            self.light.hue += 2000
+        self.light.hue = previous_hue
+        self.light.brightness = previous_brightness
+        self.light.saturation = previous_sat
+        self.light.on = previous_state
 
 
     def open_door(self):
@@ -142,9 +156,11 @@ class doorbell(object):
                         self.open_door()
                         if self.hue_enabled==True:
                             try:
-                                self.lights_on()
+                                #self.lights_on()
+                                self.rainbow_lights()
                             except:
                                 self.hue_enabled==False
+                                print('Disabling hue')
             else:
                 print('Queue Empty')
 
