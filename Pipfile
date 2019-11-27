@@ -12,6 +12,8 @@ phue = "*"
 argparse = "*"
 twilio = "*"
 configparser = "*"
+pychromecast = "*"
+phonenumbers = "*"
 
 [requires]
 python_version = "3"
