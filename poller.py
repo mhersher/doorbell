@@ -19,8 +19,8 @@ class doorbell(object):
         print('reading configuration from file...')
         config = configparser.ConfigParser()
         config.read(self.config_file)
-        for key in config['DEFAULT']:
-            print(key+':', config['DEFAULT'].get(key))
+        #for key in config['DEFAULT']:
+        #    print(key+':', config['DEFAULT'].get(key))
         settings = config['DEFAULT']
         print('...configuration read successfully')
         logfile = open(settings.get('log_folder')+'doorbell.log', 'a',1)
@@ -37,6 +37,7 @@ class doorbell(object):
         self.auth_token = settings.get('auth_token')
         self.queue_client = boto3.client('sqs')
         self.twilio_client = Client(self.account_sid, self.auth_token)
+        print('Amazon and twilio queues configured successfully')
 
         #Set Up Authorized Users & Access Control
         try:
@@ -44,17 +45,19 @@ class doorbell(object):
         except NoOptionError:
             print('No access code set')
             self.access_code = False
-        if settings.get('auth_whitelist')==True:
+        if settings.getboolean('auth_whitelist')==True:
             self.auth_whitelist=True
             self.auth_users_csv = settings.get('auth_users_csv')
             self.auth_users = {}
             self.default_sound_url = settings.get('default_sound')
             self.update_auth_users()
+            print('Auth whitelist loaded')
         else:
+            print('Auth Whitelist disabled')
             self.auth_whitelist=False
 
         #Set Up Hue Lights
-        if settings.get('hue_lights') == True:
+        if settings.getboolean('hue_lights') == True:
             try:
                 hue_bridge_ip = settings.get('hue_bridge_ip')
                 hue_bridge_username = settings.get('hue_bridge_username')
@@ -65,6 +68,7 @@ class doorbell(object):
                     hue_bridge.connect()
                     lights = hue_bridge.get_light_objects('name')
                     self.light = lights[hue_light_name]
+                    print('Hue initialized')
                 except:
                     print('Error initializing Hue bridge - lights will not work')
                     self.hue_enabled = False
@@ -74,17 +78,21 @@ class doorbell(object):
         else:
             self.hue_enabled = False
 
-        print('Setup Completed')
-
         #Set Up Chromecast
-        if settings.get('chromecast_sounds') == True:
+        if settings.getboolean('chromecast_sounds') == True:
+            self.sound_enabled = True
+            self.chromecast_name=settings.get('chromecast_name')
             chromecasts = pychromecast.get_chromecasts()
             self.cast = next(cc for cc in chromecasts if cc.device.friendly_name == self.chromecast_name)
-
+            print('Chromecast configured')
+        else:
+            print('Chromecast disabled')
+            self.sound_enabled = False
+        print('Startup complete')
 
     def update_auth_users(self):
-        users_csv = requests.get(csv_url).text.split('\n')
-        dictparser = csv.DictReader(phone_csv,delimiter=',')
+        users_csv = requests.get(self.auth_users_csv).text.split('\n')
+        dictparser = csv.DictReader(users_csv,delimiter=',')
         for row in dictparser:
             try:
                 parsed_phone = phonenumbers.format_number(phonenumbers.parse(row['Phone'], 'US'), phonenumbers.PhoneNumberFormat.E164)
@@ -124,10 +132,11 @@ class doorbell(object):
         self.update_auth_users()
 
         #Validate whether the message will unlock the door.
-        if self.auth_whitelist is not False and message_source in self.auth_numbers.keys():
+        if self.auth_whitelist is not False and message_source in self.auth_users.keys():
             print('message source validated')
             self.send_sms(message_source,'Phone number whitelisted, opening door')
-            sound = auth_numbers[message_source]['Sound']
+            sound = self.auth_users[message_source]['Sound']
+            print('opening door for ',self.auth_users[message_source]['Name'])
             lights = True
             validation_status = 1
         elif self.access_code is not False and message_body==self.access_code:
@@ -135,6 +144,7 @@ class doorbell(object):
             sound = self.default_sound_url
             lights = True
             self.send_sms(message_source,'Access code confirmed, opening door')
+            print('opening door for',message_source,'based on correct access code')
             validation_status = 2
         else:
             print('unknown message source')
@@ -146,6 +156,7 @@ class doorbell(object):
 
         #If the message unlocks the door, check to see if there's another action.
         if 'quiet' in message_body:
+            print('quiet open requested')
             lights = False
             sound = False
 
@@ -191,7 +202,8 @@ class doorbell(object):
     def play_message(self,url):
         print('playing sound from',url)
         mc = self.cast.media_controller
-        mc.play_media(url)
+        mc.wait()
+        mc.play_media(url,'audio/mp3')
 
     def open_door(self):
         if self.debug==True:
@@ -215,14 +227,14 @@ class doorbell(object):
                     message_validation, lights, sound = self.validate_sms(json.loads(message['Body']))
                     if message_validation > 0:
                         self.open_door()
-                        if lights = True and self.hue_enabled==True:
+                        if lights == True and self.hue_enabled==True:
                             try:
                                 self.rainbow_lights()
                             except:
                                 self.hue_enabled==False
                                 print('Disabling hue')
-                        if action != False:
-                            self.play_message(action)
+                        if sound != False and self.sound_enabled==True:
+                            self.play_message(sound)
             else:
                 print('Queue Empty')
 
